@@ -57,13 +57,15 @@ bool MacOSVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     [video_view_ setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
     // Create CAMetalLayer for video presentation.
-    // Match standalone mpv's MetalLayer: RGBA16Float pixel format, no forced
-    // colorspace or EDR. MoltenVK/libplacebo configure everything when the
-    // swapchain is created. EDR is only activated when mpv's cocoa-cb-output-csp
-    // option selects an HDR colorspace (standalone mpv defaults to AUTO = SDR).
+    // RGBA16Float so MoltenVK offers HDR-capable formats.
+    // wantsExtendedDynamicRangeContent allows values > 1.0 to reach the
+    // display — without it macOS clips HDR highlights. The per-frame
+    // colorspace hint in libmpv_gpu_next.c switches the swapchain between
+    // sRGB (SDR) and extended linear sRGB (HDR) based on the video content.
     metal_layer_ = [CAMetalLayer layer];
     metal_layer_.device = MTLCreateSystemDefaultDevice();
     metal_layer_.pixelFormat = MTLPixelFormatRGBA16Float;
+    metal_layer_.wantsExtendedDynamicRangeContent = YES;
     metal_layer_.framebufferOnly = YES;
     metal_layer_.frame = frame;
 
