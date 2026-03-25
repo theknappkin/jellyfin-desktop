@@ -16,7 +16,7 @@ bool VulkanSubsurfaceRenderer::hasFrame() const {
 }
 
 bool VulkanSubsurfaceRenderer::render(int width, int height) {
-#if defined(__APPLE__) || defined(_WIN32)
+#if defined(_WIN32)
     // FBO mode: we manage the swapchain, mpv renders to our image.
     (void)width; (void)height;
     VkImage image;
