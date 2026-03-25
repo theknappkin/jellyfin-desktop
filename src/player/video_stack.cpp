@@ -53,25 +53,8 @@ static void configureAudioOptions(mpv_handle* mpv, const AudioConfig& audio) {
         mpv_set_option_string(mpv, "audio-exclusive", "yes");
 }
 
-// Shared Vulkan pre-init hook: sets hwdec-codecs and PQ/BT.2020 HDR options
-static void configureVulkanHook(mpv_handle* mpv, bool use_hdr) {
+static void configureVulkanHook(mpv_handle* mpv, bool /*use_hdr*/) {
     mpv_set_option_string(mpv, "hwdec-codecs", "h264,vc1,hevc,vp8,av1,prores,prores_raw,ffv1,dpx");
-    if (use_hdr) {
-#ifdef __APPLE__
-        // macOS: libplacebo swapchain handles color management.
-        // No target options — swapchain provides the target color space
-        // (VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT via CAMetalLayer).
-        LOG_INFO(LOG_MPV, "HDR output: libplacebo swapchain mode (macOS EDR)");
-#elif defined(_WIN32)
-        // Windows: libplacebo swapchain handles color management.
-        // No target options — swapchain provides the target color space.
-        LOG_INFO(LOG_MPV, "HDR output: libplacebo swapchain mode (Windows)");
-#else
-        // Linux Wayland: libplacebo swapchain handles color management.
-        // No target options — swapchain provides the target color space.
-        LOG_INFO(LOG_MPV, "HDR output: libplacebo swapchain mode");
-#endif
-    }
 }
 
 #ifdef __APPLE__
