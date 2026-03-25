@@ -24,7 +24,10 @@ static bool createSwapchainRenderContext(MpvPlayer* player, Surface* surface) {
     vk_params.num_extensions = surface->deviceExtensionCount();
 
     VkSurfaceKHR vk_surface = surface->vkSurface();
-    mpv_display_profile dp = surface->displayProfile();
+    // Pass pointer to the surface's live display profile — NOT a copy.
+    // context.c stores this pointer for per-frame reading, and the
+    // preferred_changed callback updates it in-place.
+    auto* dp = const_cast<mpv_display_profile*>(&surface->displayProfile());
     int advanced_control = 1;
     const char* backend = "gpu-next";
     mpv_render_param params[] = {
@@ -33,14 +36,56 @@ static bool createSwapchainRenderContext(MpvPlayer* player, Surface* surface) {
         {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
         {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
         {MPV_RENDER_PARAM_VULKAN_SURFACE, &vk_surface},
-        {MPV_RENDER_PARAM_DISPLAY_PROFILE, &dp},
+        {MPV_RENDER_PARAM_DISPLAY_PROFILE, dp},
         {MPV_RENDER_PARAM_INVALID, nullptr}
     };
     if (!player->createRenderContext(params)) {
         LOG_ERROR(LOG_MPV, "Failed to create render context with VkSurface");
         return false;
     }
+    // Pass swapchain back to surface for re-hinting on preferred_changed
+    if (dp->swapchain_out)
+        surface->setSwapchain(dp->swapchain_out);
     LOG_INFO(LOG_MPV, "Vulkan render context created (libplacebo swapchain)");
+    return true;
+}
+
+// Creates a Vulkan render context WITHOUT a swapchain (FBO-only mode).
+// Used for dmabuf presentation where we manage the surface ourselves.
+template<typename Surface>
+static bool createFboRenderContext(MpvPlayer* player, Surface* surface) {
+    mpv_vulkan_init_params vk_params{};
+    vk_params.instance = surface->vkInstance();
+    vk_params.physical_device = surface->vkPhysicalDevice();
+    vk_params.device = surface->vkDevice();
+    vk_params.graphics_queue = surface->vkQueue();
+    vk_params.graphics_queue_family = surface->vkQueueFamily();
+    vk_params.get_instance_proc_addr = surface->vkGetProcAddr();
+    vk_params.features = surface->features();
+    vk_params.extensions = surface->deviceExtensions();
+    vk_params.num_extensions = surface->deviceExtensionCount();
+
+    // Pass display profile for content peak communication.
+    // video.c does PQ passthrough (no tone mapping) and writes the source
+    // content's peak luminance to display_profile.content_peak. The platform
+    // layer reads it to update the surface image description with the actual
+    // content metadata — matching standalone mpv's set_color_management.
+    auto* dp = const_cast<mpv_display_profile*>(&surface->displayProfile());
+    int advanced_control = 1;
+    const char* backend = "gpu-next";
+    mpv_render_param params[] = {
+        {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_VULKAN)},
+        {MPV_RENDER_PARAM_BACKEND, const_cast<char*>(backend)},
+        {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
+        {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
+        {MPV_RENDER_PARAM_DISPLAY_PROFILE, dp},
+        {MPV_RENDER_PARAM_INVALID, nullptr}
+    };
+    if (!player->createRenderContext(params)) {
+        LOG_ERROR(LOG_MPV, "Failed to create render context (FBO mode)");
+        return false;
+    }
+    LOG_INFO(LOG_MPV, "Vulkan render context created (FBO mode, no swapchain)");
     return true;
 }
 
@@ -264,16 +309,36 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, EGLCont
 
         auto player = std::make_unique<MpvPlayer>();
         bool use_hdr = g_wayland_subsurface->isHdr();
+        // Set PQ/BT.2020 target for dmabuf path — libplacebo renders HDR
+        // to the FBO, which we present via dmabuf on a PQ surface.
+        bool will_dmabuf = g_wayland_subsurface->supports_parametric_;
         if (!player->init(hwdec, [&](mpv_handle* mpv) {
             configureVulkanHook(mpv, use_hdr);
             configureAudioOptions(mpv, audio);
+            if (will_dmabuf) {
+                mpv_set_option_string(mpv, "target-prim", "bt.2020");
+                mpv_set_option_string(mpv, "target-trc", "pq");
+            }
         })) {
             LOG_ERROR(LOG_MPV, "MpvPlayer init failed");
             return stack;
         }
 
-        if (!createSwapchainRenderContext(player.get(), g_wayland_subsurface.get())) {
-            return stack;
+        // Try dmabuf presentation path first (enables HDR signaling).
+        // No Vulkan swapchain — we own the surface for color management.
+        bool use_dmabuf = will_dmabuf && g_wayland_subsurface->initDmabufPool(physical_w, physical_h);
+        if (use_dmabuf) {
+            // Image description set by pollDisplayProfile when compositor
+            // sends HDR capabilities via preferred_changed.
+            LOG_INFO(LOG_PLATFORM, "Using dmabuf presentation (HDR signaling enabled)");
+            if (!createFboRenderContext(player.get(), g_wayland_subsurface.get())) {
+                return stack;
+            }
+        } else {
+            // Fallback: swapchain path (no HDR signaling)
+            if (!createSwapchainRenderContext(player.get(), g_wayland_subsurface.get())) {
+                return stack;
+            }
         }
 
         stack.renderer = std::make_unique<VulkanSubsurfaceRenderer>(player.get(), g_wayland_subsurface.get());

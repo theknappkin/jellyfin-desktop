@@ -162,6 +162,10 @@ else()
     set(XDG_ACTIVATION_CLIENT_H "${WAYLAND_GENERATED_DIR}/xdg-activation-v1-client.h")
     set(XDG_ACTIVATION_CODE_C "${WAYLAND_GENERATED_DIR}/xdg-activation-v1-code.c")
 
+    set(LINUX_DMABUF_PROTOCOL "${WAYLAND_PROTOCOLS_DIR}/stable/linux-dmabuf/linux-dmabuf-v1.xml")
+    set(LINUX_DMABUF_CLIENT_H "${WAYLAND_GENERATED_DIR}/linux-dmabuf-v1-client.h")
+    set(LINUX_DMABUF_CODE_C "${WAYLAND_GENERATED_DIR}/linux-dmabuf-v1-code.c")
+
     # KDE server decoration palette — per-window titlebar colors on KWin.
     # Required by default; pass -DENABLE_KDE_PALETTE=OFF to disable.
     option(ENABLE_KDE_PALETTE "KDE/KWin per-window titlebar color support (requires plasma-wayland-protocols at build time)" ON)
@@ -210,6 +214,18 @@ else()
         DEPENDS ${XDG_ACTIVATION_PROTOCOL}
         COMMENT "Generating xdg-activation-v1 code"
     )
+    add_custom_command(
+        OUTPUT ${LINUX_DMABUF_CLIENT_H}
+        COMMAND ${WAYLAND_SCANNER} client-header ${LINUX_DMABUF_PROTOCOL} ${LINUX_DMABUF_CLIENT_H}
+        DEPENDS ${LINUX_DMABUF_PROTOCOL}
+        COMMENT "Generating linux-dmabuf-v1 client header"
+    )
+    add_custom_command(
+        OUTPUT ${LINUX_DMABUF_CODE_C}
+        COMMAND ${WAYLAND_SCANNER} private-code ${LINUX_DMABUF_PROTOCOL} ${LINUX_DMABUF_CODE_C}
+        DEPENDS ${LINUX_DMABUF_PROTOCOL}
+        COMMENT "Generating linux-dmabuf-v1 code"
+    )
     if(ENABLE_KDE_PALETTE)
         add_custom_command(
             OUTPUT ${DECO_PALETTE_CLIENT_H}
@@ -243,6 +259,8 @@ else()
         ${VIEWPORTER_CLIENT_H}
         ${XDG_ACTIVATION_CODE_C}
         ${XDG_ACTIVATION_CLIENT_H}
+        ${LINUX_DMABUF_CODE_C}
+        ${LINUX_DMABUF_CLIENT_H}
     )
     if(ENABLE_KDE_PALETTE)
         list(APPEND PLATFORM_SOURCES
@@ -431,6 +449,44 @@ target_link_libraries(jellyfin-desktop PRIVATE
     Vulkan::Vulkan
     ${PLATFORM_LIBRARIES}
 )
+
+# HDR test harness — same video stack, no CEF
+if(UNIX AND NOT APPLE)
+    add_executable(hdr-test
+        dev/hdr_test.cpp
+        src/logging.cpp
+        src/context/egl_context.cpp
+        src/player/video_stack.cpp
+        src/player/video_render_controller.cpp
+        src/player/mpv/mpv_player.cpp
+        src/player/vulkan_subsurface_renderer.cpp
+        src/player/opengl_renderer.cpp
+        src/player/mpv_event_thread.cpp
+        src/platform/wayland_subsurface.cpp
+        src/platform/x11_video_layer.cpp
+        src/context/opengl_frame_context.cpp
+        ${COLOR_MGMT_CODE_C}
+        ${COLOR_MGMT_CLIENT_H}
+        ${VIEWPORTER_CODE_C}
+        ${VIEWPORTER_CLIENT_H}
+        ${LINUX_DMABUF_CODE_C}
+        ${LINUX_DMABUF_CLIENT_H}
+    )
+    add_dependencies(hdr-test generate_version)
+    target_include_directories(hdr-test PRIVATE
+        ${MPV_INCLUDE_DIRS}
+        ${Vulkan_INCLUDE_DIRS}
+        ${PLATFORM_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
+    )
+    target_link_libraries(hdr-test PRIVATE
+        SDL3::SDL3
+        ${MPV_LIBRARIES}
+        Vulkan::Vulkan
+        ${PLATFORM_LIBRARIES}
+    )
+endif()
 
 # When using external CEF, tell the app where to find resources
 if(EXTERNAL_CEF_DIR)

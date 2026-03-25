@@ -46,6 +46,7 @@ public:
     bool isHdr() const { return is_hdr_; }
     void setColorspace() {}
     void setDestinationSize(int, int) {}
+    void setSwapchain(const void*) {}  // Windows doesn't re-hint
 
     // DXGI adapter LUID — WindowsDCompContext uses this to create its
     // D3D11 device on the same GPU.

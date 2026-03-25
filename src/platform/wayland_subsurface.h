@@ -4,19 +4,31 @@
 #include <vulkan/vulkan.h>
 #include <wayland-client.h>
 #include "wayland-protocols/color-management-v1-client.h"
+#include "wayland-protocols/linux-dmabuf-v1-client.h"
 #include "wayland-protocols/viewporter-client.h"
 #include "video_surface.h"
 #include <mpv/render_vk.h>
+#include <libplacebo/swapchain.h>
+#include <drm/drm_fourcc.h>
 #include <atomic>
 #include <vector>
 
 struct SDL_Window;
+struct DisplayProfileQuery;
 
-// Wayland subsurface with libplacebo-managed swapchain.
-// We create VkInstance/VkDevice/VkSurface and pass the VkSurface to mpv.
-// mpv's internal libplacebo creates the swapchain (identical to standalone mpv),
-// handling format selection, color management, and display profile negotiation.
-// We do NOT create our own swapchain or color management surface.
+// Dmabuf buffer for zero-copy presentation on Wayland.
+// Each buffer holds a VkImage (with dmabuf-exportable memory), the exported
+// fd, and the corresponding wl_buffer for wl_surface_attach.
+struct DmabufBuffer {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    wl_buffer* buffer = nullptr;
+    int dmabuf_fd = -1;
+    uint32_t stride = 0;
+    bool busy = false;  // owned by compositor (not yet released)
+};
+
 class WaylandSubsurface : public VideoSurface {
 public:
     WaylandSubsurface();
@@ -30,7 +42,20 @@ public:
     bool recreateSwapchain(int width, int height) override;
     void cleanup() override;
 
-    // Not used — mpv handles frame acquisition/presentation via pl_swapchain
+    // Dmabuf presentation — replaces swapchain for video rendering
+    bool initDmabufPool(uint32_t width, uint32_t height);
+    DmabufBuffer* acquireBuffer();
+    void presentBuffer(DmabufBuffer* buf);
+    void destroyDmabufPool();
+
+    // HDR signaling — set PQ/BT.2020 image description on video surface.
+    void setHdrImageDescription(uint32_t max_luma = 0, uint32_t ref_luma = 0);
+
+    // Called after render — reads content_peak from display_profile and
+    // updates the surface image description if the peak changed.
+    void updateContentPeak();
+
+    // Not used — dmabuf path handles presentation directly
     bool startFrame(VkImage*, VkImageView*, VkFormat*) override { return false; }
     void submitFrame() override {}
 
@@ -56,10 +81,15 @@ public:
 
     VkSurfaceKHR vkSurface() const { return vk_surface_; }
     const mpv_display_profile& displayProfile() const { return display_profile_; }
+    bool hasDmabufPool() const { return !dmabuf_pool_.empty(); }
+    VkFormat dmabufFormat() const { return dmabuf_vk_format_; }
+
+    // Set after render context creation so preferred_changed can re-hint
+    void setSwapchain(const void* swapchain) { swapchain_ = (pl_swapchain)swapchain; }
 
     void commit();
     void hide() override;
-    void setColorspace() override {}  // Mesa handles via swapchain
+    void setColorspace() override {}
     void setDestinationSize(int width, int height) override;
     void initDestinationSize(int width, int height);
 
@@ -67,16 +97,32 @@ public:
                                uint32_t name, const char* interface, uint32_t version);
     static void registryGlobalRemove(void* data, wl_registry* registry, uint32_t name);
 
+    // Called from preferred_changed listener on our feedback queue
+    void queryDisplayProfile();
+
+    // Dispatch feedback queue and re-query display profile if stale.
+    // Call once per frame from the render path (both dmabuf and swapchain).
+    void pollDisplayProfile();
+
+    // Public for C listener callbacks (color manager capabilities)
+    bool supports_parametric_ = false;
+    bool supports_set_luminances_ = false;
+    bool display_profile_stale_ = false;
+    uint32_t transfer_map_[32] = {};
+    uint32_t primaries_map_[32] = {};
+
 private:
     bool initWayland(SDL_Window* window);
     bool createSubsurface(wl_surface* parentSurface);
-    void queryDisplayProfile();
 
     wl_display* wl_display_ = nullptr;
     wl_compositor* wl_compositor_ = nullptr;
     wl_subcompositor* wl_subcompositor_ = nullptr;
+    wl_surface* parent_surface_ = nullptr;
     wl_surface* mpv_surface_ = nullptr;
     wl_subsurface* mpv_subsurface_ = nullptr;
+    wl_surface* cef_surface_ = nullptr;
+    wl_subsurface* cef_subsurface_ = nullptr;
 
     wp_viewporter* viewporter_ = nullptr;
     wp_viewport* viewport_ = nullptr;
@@ -93,9 +139,24 @@ private:
     VkPhysicalDeviceFeatures2 features2_{};
     std::vector<const char*> enabled_extensions_;
 
+    // Dmabuf buffer pool
+    std::vector<DmabufBuffer> dmabuf_pool_;
+    VkFormat dmabuf_vk_format_ = VK_FORMAT_A2B10G10R10_UNORM_PACK32;
+    uint32_t dmabuf_drm_format_ = DRM_FORMAT_ABGR2101010;
+    uint32_t dmabuf_width_ = 0;
+    uint32_t dmabuf_height_ = 0;
+
+    zwp_linux_dmabuf_v1* dmabuf_ = nullptr;
     wp_color_manager_v1* color_manager_ = nullptr;
+    wp_color_management_surface_v1* color_surface_ = nullptr;
+    wp_color_management_surface_feedback_v1* color_feedback_ = nullptr;
+    wl_event_queue* feedback_queue_ = nullptr;
     wl_output* wl_output_ = nullptr;
     mpv_display_profile display_profile_ = {};
+    DisplayProfileQuery* pending_query_ = nullptr;
+    struct pl_color_space preferred_csp_ = {};  // scaled preferred_csp, same as mpv's wl->preferred_csp
+    bool preferred_csp_valid_ = false;
+    pl_swapchain swapchain_ = nullptr;
 
     VkExtent2D swapchain_extent_ = {0, 0};
 

@@ -49,7 +49,8 @@ public:
 
     bool isHdr() const { return is_hdr_; }
     void setColorspace() {}  // macOS EDR is automatic
-    void setDestinationSize(int, int) {}  // no-op on macOS
+    void setDestinationSize(int, int) {}
+    void setSwapchain(const void*) {}  // macOS doesn't re-hint
 
 private:
     void queryDisplayProfile();

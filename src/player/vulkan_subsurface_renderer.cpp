@@ -8,6 +8,7 @@
 #include "platform/windows_video_layer.h"
 #else
 #include "platform/video_surface.h"
+#include "platform/wayland_subsurface.h"
 #endif
 
 VulkanSubsurfaceRenderer::VulkanSubsurfaceRenderer(MpvPlayer* player, VideoSurface* surface)
@@ -18,6 +19,56 @@ bool VulkanSubsurfaceRenderer::hasFrame() const {
 }
 
 bool VulkanSubsurfaceRenderer::render(int width, int height) {
+#if !defined(__APPLE__) && !defined(_WIN32)
+    auto* wl = static_cast<WaylandSubsurface*>(surface_);
+
+    // Poll for compositor preferred_changed events and re-query display
+    // profile when stale. Must run every frame for both dmabuf and swapchain
+    // paths — matches standalone mpv's per-frame preferred_csp update.
+    if (wl)
+        wl->pollDisplayProfile();
+
+    // Dmabuf path: render to an offscreen VkImage, present via wl_surface_attach.
+    // No Vulkan swapchain — we own the surface for HDR color management.
+    if (wl && wl->hasDmabufPool()) {
+        // Resize pool if needed
+        if (static_cast<int>(wl->width()) != width || static_cast<int>(wl->height()) != height) {
+            wl->initDmabufPool(width, height);
+        }
+
+        auto* buf = wl->acquireBuffer();
+        if (!buf) return false;  // all buffers busy
+
+        mpv_vulkan_fbo fbo{};
+        fbo.image = buf->image;
+        fbo.image_view = buf->view;
+        fbo.width = width;
+        fbo.height = height;
+        fbo.format = wl->dmabufFormat();
+        fbo.current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
+        fbo.target_layout = VK_IMAGE_LAYOUT_GENERAL;
+
+        int flip_y = 0;
+        mpv_render_param render_params[] = {
+            {MPV_RENDER_PARAM_VULKAN_FBO, &fbo},
+            {MPV_RENDER_PARAM_FLIP_Y, &flip_y},
+            {MPV_RENDER_PARAM_INVALID, nullptr}
+        };
+
+        mpv_render_context_render(player_->renderContext(), render_params);
+
+        // After render, video.c writes content_peak with the source's
+        // mastering peak. Update the surface image description so the
+        // compositor knows the actual content range — matches standalone
+        // mpv's vo_wayland_handle_color → set_color_management.
+        wl->updateContentPeak();
+
+        wl->presentBuffer(buf);
+        player_->reportSwap();
+        return true;
+    }
+#endif
+
     // Swapchain mode: mpv/libplacebo handles frame acquisition and presentation.
     int size[2] = { width, height };
     int flip_y = 0;
