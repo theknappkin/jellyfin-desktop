@@ -56,17 +56,14 @@ bool MacOSVideoLayer::init(SDL_Window* window, VkInstance, VkPhysicalDevice,
     [video_view_ setLayerContentsRedrawPolicy:NSViewLayerContentsRedrawDuringViewResize];
     [video_view_ setAutoresizingMask:NSViewWidthSizable | NSViewHeightSizable];
 
-    // Create CAMetalLayer with HDR support.
-    // libplacebo's swapchain (via MoltenVK) will present to this layer.
-    // The colorspace and EDR properties here tell macOS how to interpret
-    // the pixel values that libplacebo writes.
+    // Create CAMetalLayer for video presentation.
+    // Match standalone mpv's MetalLayer: RGBA16Float pixel format, no forced
+    // colorspace or EDR. MoltenVK/libplacebo configure everything when the
+    // swapchain is created. EDR is only activated when mpv's cocoa-cb-output-csp
+    // option selects an HDR colorspace (standalone mpv defaults to AUTO = SDR).
     metal_layer_ = [CAMetalLayer layer];
     metal_layer_.device = MTLCreateSystemDefaultDevice();
-    metal_layer_.pixelFormat = MTLPixelFormatRGBA16Float;  // HDR format
-    metal_layer_.wantsExtendedDynamicRangeContent = YES;
-    CGColorSpaceRef colorspace = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearSRGB);
-    metal_layer_.colorspace = colorspace;
-    CGColorSpaceRelease(colorspace);
+    metal_layer_.pixelFormat = MTLPixelFormatRGBA16Float;
     metal_layer_.framebufferOnly = YES;
     metal_layer_.frame = frame;
 
@@ -285,17 +282,14 @@ void MacOSVideoLayer::queryDisplayProfile() {
 
     is_hdr_ = true;
 
-    // ref_luma = PL_COLOR_SDR_WHITE makes the scaling in context.c an identity,
-    // since macOS EDR ratio is already relative to SDR white.
-    float ref_luma = PL_COLOR_SDR_WHITE;
-    float max_luma = ref_luma * (float)edr_ratio;
+    // Don't populate display_profile_ — standalone mpv on macOS doesn't pass
+    // display luminance info either (no preferred_csp callback in context_mac.m).
+    // libplacebo detects EDR capability from the swapchain directly.
+    // Passing peak luminance would make tone mapping less aggressive than mpv,
+    // causing HDR content to appear brighter.
 
-    display_profile_.max_luma = max_luma;
-    display_profile_.min_luma = 0.0f;
-    display_profile_.ref_luma = ref_luma;
-
-    NSLog(@"Display EDR: ratio=%.1f -> max=%.0f ref=%.0f nits",
-          edr_ratio, max_luma, ref_luma);
+    NSLog(@"Display EDR: ratio=%.1f (no display profile — libplacebo detects from swapchain)",
+          edr_ratio);
 }
 
 #endif // __APPLE__
