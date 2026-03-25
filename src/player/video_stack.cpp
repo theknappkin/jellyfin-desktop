@@ -63,14 +63,9 @@ static void configureVulkanHook(mpv_handle* mpv, bool use_hdr) {
         // (VK_COLOR_SPACE_EXTENDED_SRGB_LINEAR_EXT via CAMetalLayer).
         LOG_INFO(LOG_MPV, "HDR output: libplacebo swapchain mode (macOS EDR)");
 #elif defined(_WIN32)
-        // Windows HDR: PQ/BT.2020 via DComp swapchain (FBO path)
-        mpv_set_option_string(mpv, "target-prim", "bt.2020");
-        mpv_set_option_string(mpv, "target-trc", "pq");
-        mpv_set_option_string(mpv, "target-colorspace-hint", "yes");
-        mpv_set_option_string(mpv, "tone-mapping", "clip");
-        double peak = 1000.0;
-        mpv_set_option(mpv, "target-peak", MPV_FORMAT_DOUBLE, &peak);
-        LOG_INFO(LOG_MPV, "HDR output enabled (bt.2020/pq/1000 nits)");
+        // Windows: libplacebo swapchain handles color management.
+        // No target options — swapchain provides the target color space.
+        LOG_INFO(LOG_MPV, "HDR output: libplacebo swapchain mode (Windows)");
 #else
         // Linux Wayland: libplacebo swapchain handles color management.
         // No target options — swapchain provides the target color space.
@@ -149,55 +144,22 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, const c
 
 #elif defined(_WIN32)
 #include "vulkan_subsurface_renderer.h"
-#include "platform/windows_video_surface.h"
-
-template<typename Surface>
-static bool createVulkanRenderContext(MpvPlayer* player, Surface* surface) {
-    mpv_vulkan_init_params vk_params{};
-    vk_params.instance = surface->vkInstance();
-    vk_params.physical_device = surface->vkPhysicalDevice();
-    vk_params.device = surface->vkDevice();
-    vk_params.graphics_queue = surface->vkQueue();
-    vk_params.graphics_queue_family = surface->vkQueueFamily();
-    vk_params.get_instance_proc_addr = surface->vkGetProcAddr();
-    vk_params.features = surface->features();
-    vk_params.extensions = surface->deviceExtensions();
-    vk_params.num_extensions = surface->deviceExtensionCount();
-
-    int advanced_control = 1;
-    const char* backends[] = {"gpu-next", "gpu"};
-    for (const char* backend : backends) {
-        mpv_render_param params[] = {
-            {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_VULKAN)},
-            {MPV_RENDER_PARAM_BACKEND, const_cast<char*>(backend)},
-            {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
-            {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
-            {MPV_RENDER_PARAM_INVALID, nullptr}
-        };
-        if (player->createRenderContext(params)) {
-            LOG_INFO(LOG_MPV, "Using backend: %s", backend);
-            return true;
-        }
-        LOG_WARN(LOG_MPV, "Backend '%s' failed, trying next", backend);
-    }
-    LOG_ERROR(LOG_MPV, "All Vulkan backends failed");
-    return false;
-}
+#include "platform/windows_video_layer.h"
 
 namespace {
-    std::unique_ptr<WindowsVideoSurface> g_windows_video_surface;
+    std::unique_ptr<WindowsVideoLayer> g_windows_video_layer;
     bool atexit_registered = false;
 
     void atexitCleanup() {
-        if (g_windows_video_surface) {
-            g_windows_video_surface->cleanup();
-            g_windows_video_surface.reset();
+        if (g_windows_video_layer) {
+            g_windows_video_layer->cleanup();
+            g_windows_video_layer.reset();
         }
     }
 }
 
 VideoStack VideoStack::create(SDL_Window* window, int width, int height, const char* hwdec, AudioConfig audio) {
-    (void)width; (void)height;  // Use physical dimensions instead
+    (void)width; (void)height;
     VideoStack stack;
 
     if (!atexit_registered) {
@@ -205,22 +167,18 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, const c
         atexit_registered = true;
     }
 
-    g_windows_video_surface = std::make_unique<WindowsVideoSurface>();
-    if (!g_windows_video_surface->init(window, VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, 0,
-                                       nullptr, 0, nullptr)) {
-        LOG_ERROR(LOG_PLATFORM, "Fatal: Windows video surface init failed");
+    g_windows_video_layer = std::make_unique<WindowsVideoLayer>();
+    if (!g_windows_video_layer->init(window)) {
+        LOG_ERROR(LOG_PLATFORM, "Fatal: Windows video layer init failed");
         return stack;
     }
 
     int physical_w, physical_h;
     SDL_GetWindowSizeInPixels(window, &physical_w, &physical_h);
-    if (!g_windows_video_surface->createSwapchain(physical_w, physical_h)) {
-        LOG_ERROR(LOG_PLATFORM, "Fatal: Windows video surface swapchain failed");
-        return stack;
-    }
+    g_windows_video_layer->createSwapchain(physical_w, physical_h);
 
     auto player = std::make_unique<MpvPlayer>();
-    bool use_hdr = g_windows_video_surface->isHdr();
+    bool use_hdr = g_windows_video_layer->isHdr();
     if (!player->init(hwdec, [&](mpv_handle* mpv) {
         configureVulkanHook(mpv, use_hdr);
         configureAudioOptions(mpv, audio);
@@ -229,17 +187,16 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, const c
         return stack;
     }
 
-    if (!createVulkanRenderContext(player.get(), g_windows_video_surface.get())) {
+    if (!createSwapchainRenderContext(player.get(), g_windows_video_layer.get())) {
         return stack;
     }
-    LOG_INFO(LOG_MPV, "Vulkan render context created");
 
-    stack.renderer = std::make_unique<VulkanSubsurfaceRenderer>(player.get(), g_windows_video_surface.get());
+    stack.renderer = std::make_unique<VulkanSubsurfaceRenderer>(player.get(), g_windows_video_layer.get());
     stack.player = std::move(player);
-    stack.surface = g_windows_video_surface.get();
+    stack.video_layer = g_windows_video_layer.get();
 
-    LOG_INFO(LOG_PLATFORM, "Using Vulkan gpu-next with DComp for video (HDR: %s)",
-             g_windows_video_surface->isHdr() ? "yes" : "no");
+    LOG_INFO(LOG_PLATFORM, "Using Vulkan gpu-next with libplacebo swapchain (HDR: %s)",
+             g_windows_video_layer->isHdr() ? "yes" : "no");
     return stack;
 }
 
@@ -399,9 +356,9 @@ void VideoStack::cleanupStatics() {
         g_macos_layer.reset();
     }
 #elif defined(_WIN32)
-    if (g_windows_video_surface) {
-        g_windows_video_surface->cleanup();
-        g_windows_video_surface.reset();
+    if (g_windows_video_layer) {
+        g_windows_video_layer->cleanup();
+        g_windows_video_layer.reset();
     }
 #else
     if (g_wayland_subsurface) {
