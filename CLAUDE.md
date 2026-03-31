@@ -31,3 +31,34 @@ mpv is the authoritative source of playback state. All state (position, speed, p
 
 ## Debugging
 - For mpv (third_party/mpv) and jellyfin-web: investigate source code directly before suggesting debug logs that require manual user action
+
+## Test Harnesses
+
+Test harnesses in `dev/` run the video stack (SDL window, EGL, Vulkan subsurface, mpv, libplacebo) with scripted scenarios for autonomous reproduction of bugs. They don't include CEF — they isolate the video layer for issues where CEF interaction isn't the variable. For full-stack verification (CEF compositing + video), test with the actual app.
+
+### When to write a test harness
+
+When the user reports a visual issue (wrong size, color, position, timing) that you can't diagnose from code reading alone, **write a harness that reproduces it**. Don't guess at fixes — prove the bug exists first, then prove the fix works.
+
+### How to write one
+
+1. **Copy the pattern** from `dev/hdr_test.cpp` — it has the canonical setup: SDL window → EGL → VideoStack::create → VideoRenderController (threaded) → event loop with mpv.
+2. **Script the scenario**: use timers and SDL APIs to trigger the condition (e.g. `SDL_SetWindowFullscreen` after 3 seconds, resize to specific dimensions, toggle visibility).
+3. **Add targeted logging** at the boundaries you suspect: log dimensions at SDL level, at the renderer, at the surface. Compare what each layer thinks the size/state is.
+4. **Add the CMake target** following the `hdr-test` pattern in `CMakeLists.txt` (same source list, just swap the test `.cpp`).
+5. **Run it, read the logs, find the mismatch**. The bug is wherever two layers disagree about a value.
+
+### Existing harnesses
+
+- `dev/hdr_test.cpp` + `dev/hdr_compare.sh` — HDR color management protocol validation against standalone mpv
+- `dev/resize_test.cpp` — fullscreen resize: starts 960x540, goes fullscreen after 3s, logs all dimension state transitions
+
+### Limitations
+
+These harnesses don't include CEF. The transparent EGL surface stands in for where CEF would render, but the CEF compositor, browser, and paint callbacks are absent. This means they can't catch issues involving CEF/video layer interaction (z-ordering, input passthrough, compositing alpha). For those, use the real app.
+
+### Tips
+
+- The harnesses share the same video stack code as the real app — a fix verified in a harness is verified in the app.
+- Temporary debug logging in the real source files is fine during investigation — just clean it up before committing.
+- For protocol-level debugging, combine with `WAYLAND_DEBUG=1` (stderr capture) to see actual Wayland messages.

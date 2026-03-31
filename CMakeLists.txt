@@ -488,6 +488,44 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
+# Resize test harness — tests fullscreen video layer resize
+if(UNIX AND NOT APPLE)
+    add_executable(resize-test
+        dev/resize_test.cpp
+        src/logging.cpp
+        src/context/egl_context.cpp
+        src/player/video_stack.cpp
+        src/player/video_render_controller.cpp
+        src/player/mpv/mpv_player.cpp
+        src/player/vulkan_subsurface_renderer.cpp
+        src/player/opengl_renderer.cpp
+        src/player/mpv_event_thread.cpp
+        src/platform/wayland_subsurface.cpp
+        src/platform/x11_video_layer.cpp
+        src/context/opengl_frame_context.cpp
+        ${COLOR_MGMT_CODE_C}
+        ${COLOR_MGMT_CLIENT_H}
+        ${VIEWPORTER_CODE_C}
+        ${VIEWPORTER_CLIENT_H}
+        ${LINUX_DMABUF_CODE_C}
+        ${LINUX_DMABUF_CLIENT_H}
+    )
+    add_dependencies(resize-test generate_version)
+    target_include_directories(resize-test PRIVATE
+        ${MPV_INCLUDE_DIRS}
+        ${Vulkan_INCLUDE_DIRS}
+        ${PLATFORM_INCLUDE_DIRS}
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_BINARY_DIR}/generated
+    )
+    target_link_libraries(resize-test PRIVATE
+        SDL3::SDL3
+        ${MPV_LIBRARIES}
+        Vulkan::Vulkan
+        ${PLATFORM_LIBRARIES}
+    )
+endif()
+
 # When using external CEF, tell the app where to find resources
 if(EXTERNAL_CEF_DIR)
     target_compile_definitions(jellyfin-desktop PRIVATE

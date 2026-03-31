@@ -31,8 +31,11 @@ bool VulkanSubsurfaceRenderer::render(int width, int height) {
     // Dmabuf path: render to an offscreen VkImage, present via wl_surface_attach.
     // No Vulkan swapchain — we own the surface for HDR color management.
     if (wl && wl->hasDmabufPool()) {
-        // Resize pool if needed
-        if (static_cast<int>(wl->width()) != width || static_cast<int>(wl->height()) != height) {
+        // Resize pool if actual buffer dimensions don't match render target.
+        // Compare against dmabuf pool dimensions, not swapchain_extent_ —
+        // recreateSwapchain updates swapchain_extent_ without touching the
+        // pool, so checking wl->width() would miss the mismatch.
+        if (static_cast<int>(wl->dmabufWidth()) != width || static_cast<int>(wl->dmabufHeight()) != height) {
             wl->initDmabufPool(width, height);
         }
 

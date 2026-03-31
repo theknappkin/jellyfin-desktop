@@ -82,6 +82,8 @@ public:
     VkSurfaceKHR vkSurface() const { return vk_surface_; }
     const mpv_display_profile& displayProfile() const { return display_profile_; }
     bool hasDmabufPool() const { return !dmabuf_pool_.empty(); }
+    uint32_t dmabufWidth() const { return dmabuf_width_; }
+    uint32_t dmabufHeight() const { return dmabuf_height_; }
     VkFormat dmabufFormat() const { return dmabuf_vk_format_; }
 
     // Set after render context creation so preferred_changed can re-hint
