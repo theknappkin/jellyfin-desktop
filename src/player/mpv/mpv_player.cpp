@@ -3,7 +3,82 @@
 #include <mpv/render.h>
 #include <clocale>
 #include <cmath>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <cstdlib>
 #include "logging.h"
+
+// Load user mpv.conf from the jellyfin-desktop config directory.
+// Supports key=value pairs and flags (key with no value → "yes").
+// Lines starting with # and empty lines are skipped.
+static void loadMpvConf(mpv_handle* mpv) {
+    std::string config_dir;
+#ifdef _WIN32
+    const char* appdata = std::getenv("APPDATA");
+    if (appdata && appdata[0])
+        config_dir = std::string(appdata) + "\\jellyfin-desktop";
+    else
+        return;
+#else
+    const char* xdg_config = std::getenv("XDG_CONFIG_HOME");
+    if (xdg_config && xdg_config[0]) {
+        config_dir = std::string(xdg_config) + "/jellyfin-desktop";
+    } else {
+        const char* home = std::getenv("HOME");
+        if (home)
+            config_dir = std::string(home) + "/.config/jellyfin-desktop";
+        else
+            return;
+    }
+#endif
+
+    std::string conf_path = config_dir +
+#ifdef _WIN32
+        "\\mpv.conf";
+#else
+        "/mpv.conf";
+#endif
+
+    std::ifstream file(conf_path);
+    if (!file.is_open())
+        return;
+
+    LOG_INFO(LOG_MPV, "Loading mpv.conf from %s", conf_path.c_str());
+
+    std::string line;
+    int line_num = 0;
+    while (std::getline(file, line)) {
+        line_num++;
+
+        // Trim leading/trailing whitespace
+        size_t start = line.find_first_not_of(" \t\r\n");
+        if (start == std::string::npos) continue;
+        size_t end = line.find_last_not_of(" \t\r\n");
+        line = line.substr(start, end - start + 1);
+
+        // Skip comments and empty lines
+        if (line.empty() || line[0] == '#') continue;
+
+        std::string key, value;
+        size_t eq = line.find('=');
+        if (eq != std::string::npos) {
+            key = line.substr(0, eq);
+            value = line.substr(eq + 1);
+        } else {
+            key = line;
+            value = "yes";
+        }
+
+        int ret = mpv_set_option_string(mpv, key.c_str(), value.c_str());
+        if (ret < 0) {
+            LOG_WARN(LOG_MPV, "mpv.conf line %d: failed to set '%s=%s': %s",
+                     line_num, key.c_str(), value.c_str(), mpv_error_string(ret));
+        } else {
+            LOG_INFO(LOG_MPV, "mpv.conf: %s=%s", key.c_str(), value.c_str());
+        }
+    }
+}
 
 MpvPlayer::MpvPlayer() = default;
 
@@ -196,6 +271,9 @@ bool MpvPlayer::init(const char* hwdec, PreInitHook preInitHook) {
     if (preInitHook) {
         preInitHook(mpv_);
     }
+
+    // Load user mpv.conf (overrides any options set above)
+    loadMpvConf(mpv_);
 
     if (mpv_initialize(mpv_) < 0) {
         LOG_ERROR(LOG_MPV, "mpv_initialize failed");
