@@ -523,6 +523,13 @@ DmabufBuffer* WaylandSubsurface::acquireBuffer() {
 void WaylandSubsurface::presentBuffer(DmabufBuffer* buf) {
     if (!buf || !mpv_surface_) return;
     buf->busy = true;
+    // Apply any pending viewport destination before commit — setDestinationSize
+    // may arrive after recreateSwapchain already ran for this resize.
+    if (viewport_ && dest_pending_.exchange(false, std::memory_order_acquire)) {
+        wp_viewport_set_destination(viewport_,
+            pending_dest_width_.load(std::memory_order_relaxed),
+            pending_dest_height_.load(std::memory_order_relaxed));
+    }
     wl_surface_attach(mpv_surface_, buf->buffer, 0, 0);
     wl_surface_damage_buffer(mpv_surface_, 0, 0, dmabuf_width_, dmabuf_height_);
     wl_surface_commit(mpv_surface_);

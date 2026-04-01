@@ -20,12 +20,7 @@
 static constexpr int TEST_DURATION_SEC = 5;
 
 static const char* HDR_TEST_URL =
-    "https://jellyfin.nullsum.net/Videos/61e35022113290eec74e625dcda4530c/stream.mkv"
-    "?Static=true"
-    "&mediaSourceId=61e35022113290eec74e625dcda4530c"
-    "&deviceId=TW96aWxsYS81LjAgKFgxMTsgTGludXggeDg2XzY0KSBBcHBsZVdlYktpdC81MzcuMzYgKEtIVE1MLCBsaWtlIEdlY2tvKSBDaHJvbWUvMTQ1LjAuMC4wIFNhZmFyaS81MzcuMzZ8MTc3NDIzMDQ3OTM5OQ11"
-    "&ApiKey=119982a9125e451bad9d31dfbfc13f1e"
-    "&Tag=5bf4b4a92402f50418d19cd8cb2f2402";
+    ""; // Replace with your Jellyfin video URL
 
 int main(int argc, char* argv[]) {
     (void)argc; (void)argv;

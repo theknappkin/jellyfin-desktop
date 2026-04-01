@@ -488,12 +488,18 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-# Resize test harness — tests fullscreen video layer resize
+# Resize test harness — full composited stack (CEF + video subsurface)
 if(UNIX AND NOT APPLE)
     add_executable(resize-test
         dev/resize_test.cpp
         src/logging.cpp
+        src/cef/cef_app.cpp
+        src/cef/resource_handler.cpp
+        src/settings.cpp
+        src/cjson/cJSON.c
         src/context/egl_context.cpp
+        src/context/opengl_frame_context.cpp
+        src/compositor/opengl_compositor.cpp
         src/player/video_stack.cpp
         src/player/video_render_controller.cpp
         src/player/mpv/mpv_player.cpp
@@ -502,7 +508,6 @@ if(UNIX AND NOT APPLE)
         src/player/mpv_event_thread.cpp
         src/platform/wayland_subsurface.cpp
         src/platform/x11_video_layer.cpp
-        src/context/opengl_frame_context.cpp
         ${COLOR_MGMT_CODE_C}
         ${COLOR_MGMT_CLIENT_H}
         ${VIEWPORTER_CODE_C}
@@ -510,8 +515,9 @@ if(UNIX AND NOT APPLE)
         ${LINUX_DMABUF_CODE_C}
         ${LINUX_DMABUF_CLIENT_H}
     )
-    add_dependencies(resize-test generate_version)
+    add_dependencies(resize-test generate_version embedded_js embedded_resources)
     target_include_directories(resize-test PRIVATE
+        ${CEF_INCLUDE_DIRS}
         ${MPV_INCLUDE_DIRS}
         ${Vulkan_INCLUDE_DIRS}
         ${PLATFORM_INCLUDE_DIRS}
@@ -519,6 +525,7 @@ if(UNIX AND NOT APPLE)
         ${CMAKE_BINARY_DIR}/generated
     )
     target_link_libraries(resize-test PRIVATE
+        ${CEF_LIBRARIES}
         SDL3::SDL3
         ${MPV_LIBRARIES}
         Vulkan::Vulkan
@@ -526,11 +533,16 @@ if(UNIX AND NOT APPLE)
     )
 endif()
 
-# When using external CEF, tell the app where to find resources
+# When using external CEF, tell the app and test harnesses where to find resources
 if(EXTERNAL_CEF_DIR)
     target_compile_definitions(jellyfin-desktop PRIVATE
         CEF_RESOURCES_DIR="${CEF_RESOURCE_DIR}"
     )
+    if(TARGET resize-test)
+        target_compile_definitions(resize-test PRIVATE
+            CEF_RESOURCES_DIR="${CEF_RESOURCE_DIR}"
+        )
+    endif()
 endif()
 
 # Enable ARC for Objective-C++ files on macOS
