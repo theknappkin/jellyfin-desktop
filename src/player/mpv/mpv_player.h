@@ -116,4 +116,5 @@ private:
     bool playing_ = false;
     bool seeking_ = false;
     double last_position_ = 0.0;
+    std::string user_af_;  // User-configured audio filters from mpv.conf, preserved across normalization changes
 };

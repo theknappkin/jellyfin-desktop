@@ -280,6 +280,15 @@ bool MpvPlayer::init(const char* hwdec, PreInitHook preInitHook) {
         return false;
     }
 
+    // Capture user-configured audio filters (from mpv.conf) so they survive
+    // setNormalizationGain() calls which would otherwise overwrite them
+    char* af_val = mpv_get_property_string(mpv_, "af");
+    if (af_val && af_val[0]) {
+        user_af_ = af_val;
+        LOG_INFO(LOG_MPV, "User audio filters preserved: %s", user_af_.c_str());
+    }
+    if (af_val) mpv_free(af_val);
+
     // Enable mpv log forwarding (info level by default)
     mpv_request_log_messages(mpv_, "info");
 
@@ -397,14 +406,20 @@ void MpvPlayer::setSpeed(double speed) {
 void MpvPlayer::setNormalizationGain(double gainDb) {
     if (!mpv_) return;
     if (gainDb == 0.0) {
-        // Clear audio filter
-        mpv_set_property_string(mpv_, "af", "");
+        // Restore user-configured filters (from mpv.conf) or clear
+        if (user_af_.empty()) {
+            mpv_set_property_string(mpv_, "af", "");
+        } else {
+            mpv_set_property_string(mpv_, "af", user_af_.c_str());
+        }
     } else {
-        // Apply gain via lavfi volume filter
-        // Format: lavfi=[volume=<dB>dB]
+        // Apply gain via lavfi volume filter, preserving user filters
         char filter[64];
         snprintf(filter, sizeof(filter), "lavfi=[volume=%.2fdB]", gainDb);
-        mpv_set_property_string(mpv_, "af", filter);
+        std::string combined = user_af_.empty()
+            ? std::string(filter)
+            : user_af_ + "," + filter;
+        mpv_set_property_string(mpv_, "af", combined.c_str());
         LOG_INFO(LOG_MPV, "Normalization gain: %.2f dB", gainDb);
     }
 }
