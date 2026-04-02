@@ -231,7 +231,45 @@ VideoStack VideoStack::create(SDL_Window* window, int width, int height, const c
         return stack;
     }
 
-    if (!createVulkanRenderContext(player.get(), g_windows_video_surface.get())) {
+    if (use_hdr) {
+        // Pass display profile so libplacebo knows the output is HDR
+        // and doesn't tone-map to SDR before writing to the FBO.
+        mpv_vulkan_init_params vk_params{};
+        vk_params.instance = g_windows_video_surface->vkInstance();
+        vk_params.physical_device = g_windows_video_surface->vkPhysicalDevice();
+        vk_params.device = g_windows_video_surface->vkDevice();
+        vk_params.graphics_queue = g_windows_video_surface->vkQueue();
+        vk_params.graphics_queue_family = g_windows_video_surface->vkQueueFamily();
+        vk_params.get_instance_proc_addr = g_windows_video_surface->vkGetProcAddr();
+        vk_params.features = g_windows_video_surface->features();
+        vk_params.extensions = g_windows_video_surface->deviceExtensions();
+        vk_params.num_extensions = g_windows_video_surface->deviceExtensionCount();
+
+        mpv_display_profile dp = g_windows_video_surface->displayProfile();
+        int advanced_control = 1;
+        const char* backends[] = {"gpu-next", "gpu"};
+        bool ok = false;
+        for (const char* backend : backends) {
+            mpv_render_param params[] = {
+                {MPV_RENDER_PARAM_API_TYPE, const_cast<char*>(MPV_RENDER_API_TYPE_VULKAN)},
+                {MPV_RENDER_PARAM_BACKEND, const_cast<char*>(backend)},
+                {MPV_RENDER_PARAM_VULKAN_INIT_PARAMS, &vk_params},
+                {MPV_RENDER_PARAM_ADVANCED_CONTROL, &advanced_control},
+                {MPV_RENDER_PARAM_DISPLAY_PROFILE, &dp},
+                {MPV_RENDER_PARAM_INVALID, nullptr}
+            };
+            if (player->createRenderContext(params)) {
+                LOG_INFO(LOG_MPV, "Using backend: %s (with display profile)", backend);
+                ok = true;
+                break;
+            }
+            LOG_WARN(LOG_MPV, "Backend '%s' failed, trying next", backend);
+        }
+        if (!ok) {
+            LOG_ERROR(LOG_MPV, "All Vulkan backends failed");
+            return stack;
+        }
+    } else if (!createVulkanRenderContext(player.get(), g_windows_video_surface.get())) {
         return stack;
     }
     LOG_INFO(LOG_MPV, "Vulkan render context created");

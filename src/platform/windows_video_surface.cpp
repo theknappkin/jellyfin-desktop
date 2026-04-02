@@ -177,6 +177,11 @@ bool WindowsVideoSurface::detectHdrCapability() {
     if (FAILED(hr)) return false;
 
     bool hdr = (desc1.ColorSpace == DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020);
+    if (hdr) {
+        display_profile_.max_luma = desc1.MaxLuminance;
+        display_profile_.min_luma = desc1.MinLuminance;
+        display_profile_.ref_luma = 203.0f;  // ITU-R BT.2408 reference white
+    }
     LOG_INFO(LOG_PLATFORM, "[WindowsVideoSurface] Display HDR: %s (colorSpace=%d, maxLuminance=%.0f, minLuminance=%.4f)",
              hdr ? "yes" : "no", desc1.ColorSpace, desc1.MaxLuminance, desc1.MinLuminance);
     return hdr;

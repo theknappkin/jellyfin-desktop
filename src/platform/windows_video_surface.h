@@ -9,6 +9,7 @@
 #include <dcomp.h>
 #include <dwmapi.h>
 #include "video_surface.h"
+#include <mpv/render_vk.h>
 #include <vector>
 #include <mutex>
 
@@ -54,6 +55,8 @@ public:
 
     void show() override;
     void hide() override;
+
+    const mpv_display_profile& displayProfile() const { return display_profile_; }
 
     // Public accessors for DComp infrastructure (used by WindowsOverlayLayer)
     IDCompositionDevice* dcompDevice() const { return dcomp_device_; }
@@ -114,6 +117,7 @@ private:
     // (video render thread's submitFrame vs main thread's overlay end)
     std::mutex d3d_mutex_;
 
+    mpv_display_profile display_profile_ = {};
     bool is_hdr_ = false;
     DXGI_FORMAT dxgi_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
     VkFormat vk_format_ = VK_FORMAT_B8G8R8A8_UNORM;
